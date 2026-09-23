@@ -13407,12 +13407,19 @@ export function issueRoutes(
         });
         const runToStopForReassignment = await resolveActiveIssueRun(existing);
         if (runToStopForReassignment) {
+          // The run that records a policy transition ends its own turn with it.
+          // Its stop is a completed handoff, not an interrupted action.
+          const workflowHandoff = transition.workflowControlledAssignment &&
+            actor.actorType === "agent" && actor.runId === runToStopForReassignment.id &&
+            runToStopForReassignment.agentId === actor.agentId
+            ? { runId: runToStopForReassignment.id, issueId: existing.id, fromAgentId: actor.agentId }
+            : undefined;
           const cancelled = await heartbeat.cancelRun(
             runToStopForReassignment.id,
             "Cancelled before issue reassignment",
             {
               errorCode: "issue_reassigned",
-              resultJson: { reassignmentStopConfirmed: true },
+              resultJson: { reassignmentStopConfirmed: true, ...(workflowHandoff ? { workflowHandoff } : {}) },
               eventMessage: "run cancelled before issue reassignment",
               eventPayload: { issueId: existing.id },
             },

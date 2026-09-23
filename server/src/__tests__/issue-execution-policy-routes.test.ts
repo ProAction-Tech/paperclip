@@ -657,6 +657,61 @@ describe("issue execution policy routes", () => {
     );
   });
 
+  it.each([
+    ["the agent's own run", "55555555-5555-4555-8555-555555555555", true],
+    ["another run of the agent", "66666666-6666-4666-8666-666666666666", false],
+  ])("marks the stop of %s as a workflow handoff only when that run records the transition", async (_label, actorRunId, marked) => {
+    const runId = "55555555-5555-4555-8555-555555555555";
+    const issue = {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      companyId: "company-1",
+      status: "todo",
+      assigneeAgentId: "33333333-3333-4333-8333-333333333333",
+      assigneeUserId: null,
+      createdByUserId: "local-board",
+      identifier: "PAP-1006",
+      title: "Handoff stop",
+      executionPolicy: null,
+      executionState: null,
+      executionRunId: runId,
+    };
+    const policy = normalizeIssueExecutionPolicy({
+      stages: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          type: "review",
+          participants: [{ type: "agent", agentId: "44444444-4444-4444-8444-444444444444" }],
+        },
+      ],
+    })!;
+    mockIssueService.getById.mockResolvedValue(issue);
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      ...issue,
+      ...patch,
+      updatedAt: new Date(),
+    }));
+    mockHeartbeatService.getRun.mockResolvedValue({ id: runId, companyId: "company-1", status: "running",
+      agentId: "33333333-3333-4333-8333-333333333333", contextSnapshot: { issueId: issue.id } } as never);
+    mockHeartbeatService.cancelRun.mockResolvedValue({ id: runId, status: "cancelled" } as never);
+
+    const res = await request(await createApp({
+      type: "agent",
+      agentId: "33333333-3333-4333-8333-333333333333",
+      companyId: "company-1",
+      runId: actorRunId,
+    }))
+      .patch("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+      .send({ status: "in_review", executionPolicy: policy });
+
+    expect(res.status).toBe(200);
+    const options = (mockHeartbeatService.cancelRun.mock.calls[0] as unknown[] | undefined)?.[2] as
+      { resultJson?: Record<string, unknown> } | undefined;
+    expect(options?.resultJson?.reassignmentStopConfirmed).toBe(true);
+    expect(options?.resultJson?.workflowHandoff).toEqual(marked
+      ? { runId, issueId: issue.id, fromAgentId: "33333333-3333-4333-8333-333333333333" }
+      : undefined);
+  });
+
   it("allows an agent-authored in_review transition with a scheduled monitor", async () => {
     const issue = {
       id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",

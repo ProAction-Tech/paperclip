@@ -11,9 +11,19 @@ import { isSupersededConversationRun } from "./agent-conversations.js";
 type Run = typeof heartbeatRuns.$inferSelect;
 export const LEGACY_RECOVERY_CAUSE = "legacy_execution_requires_reconciliation";
 
+/** The run stopped because it recorded a policy-controlled handoff itself. */
+export function isSelfWorkflowHandoffStop(
+  run: Pick<Run, "status" | "errorCode" | "resultJson"> & Partial<Pick<Run, "id" | "contextSnapshot">>,
+): boolean {
+  const handoff = run.resultJson?.workflowHandoff as Record<string, unknown> | undefined;
+  return run.status === "cancelled" && run.errorCode === "issue_reassigned" &&
+    run.resultJson?.reassignmentStopConfirmed === true && !!handoff && !!run.id && handoff.runId === run.id &&
+    typeof handoff.issueId === "string" && handoff.issueId === run.contextSnapshot?.issueId;
+}
+
 /** Error families describe availability, not whether earlier actions happened. */
 export function legacyExecutionNeedsReconciliation(
-  run: Pick<Run, "runtimeMode" | "status" | "errorCode" | "resultJson"> & Partial<Pick<Run, "scheduledRetryAttempt" | "scheduledRetryReason" | "contextSnapshot">>,
+  run: Pick<Run, "runtimeMode" | "status" | "errorCode" | "resultJson"> & Partial<Pick<Run, "id" | "scheduledRetryAttempt" | "scheduledRetryReason" | "contextSnapshot">>,
 ): boolean {
   if (
     run.runtimeMode === "native" ||
@@ -23,6 +33,8 @@ export function legacyExecutionNeedsReconciliation(
   // A fresh conversation turn lets the agent decide what remains. The retry
   // scheduler, not an action-outcome hold, owns the automatic attempt limit.
   if (hasConversationContinuationPolicy(run.resultJson)) return false;
+  // A policy handoff recorded by this run ends its turn; nothing is left unverified.
+  if (isSelfWorkflowHandoffStop(run)) return false;
   // Productive turn-budget continuation is not a failed provider session.
   if (normalizeMaxTurnStopReason(run.resultJson?.stopReason) ?? normalizeMaxTurnStopReason(run.errorCode)) return false;
   const evidence = run.resultJson?.executionRecovery as
